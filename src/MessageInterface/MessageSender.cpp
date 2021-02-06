@@ -33,13 +33,39 @@ void MessageInterface::MessageSender::sendMessage()
     I2CInterface::writeWriteBuffer(_messageBuffer, _header->msgSize);
     I2CInterface::writeWriteBuffer((uint8_t*)"<END>", 5);
 
-    char logStr[64] = {
+    interrupts();
+
+    char logStr[128] = {
         0,
     };
-    snprintf(logStr, sizeof(logStr), "[%s:%d] Write Send Message. Size(%d)", __FUNCTION__, __LINE__, _header->msgSize);
+    snprintf(logStr, sizeof(logStr), "[%s:%d] MsgID:0x%X Size:%d NumOfData:%d", __FUNCTION__, __LINE__, _header->msgId, _header->msgSize, _header->numOfData);
     Serial.println(logStr);
 
-    interrupts();
+    for (int i = 0; i < _header->numOfData; i++)
+    {
+        switch (_header->msgId)
+        {
+        case MsgId::RequestGet:
+        case MsgId::Subscribe:
+        case MsgId::Unsubscribe:
+        case MsgId::Acknowledge:
+        {
+            const RequestGetData *data = (const RequestGetData *)(_messageBuffer + sizeof(MsgCommonHeader) + i * sizeof(RequestGetData));
+            snprintf(logStr, sizeof(logStr), "[%s:%d] DataIdx:%d Type:0x%0X", __FUNCTION__, __LINE__, i, data->type);
+            Serial.println(logStr);
+        }
+        break;
+        case MsgId::Notification:
+        case MsgId::RequestSet:
+        case MsgId::ResponseGet:
+        {
+            const RequestSetData *data = (const RequestSetData *)(_messageBuffer + sizeof(MsgCommonHeader) + i * sizeof(RequestSetData));
+            snprintf(logStr, sizeof(logStr), "[%s:%d] DataIdx:%d Type:0x%0X Value:%d", __FUNCTION__, __LINE__, i, data->type, ntohl(data->value));
+            Serial.println(logStr);
+        }
+        break;
+        }
+    }
 }
 
 void MessageInterface::MessageSender::appendRequestGetDataCommon(unsigned char dataType)
