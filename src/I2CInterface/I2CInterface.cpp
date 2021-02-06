@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "I2CInterface.h"
+#include "../MessageInterface/MessageInterface.h"
 
 uint8_t I2CInterface::i2cReadBuffer[I2C_INTERFACE_BUFFER_SIZE] = {
     0,
@@ -21,16 +22,16 @@ void I2CInterface::I2C_Master::init()
     Serial.println("I2C Master Initialized");
 }
 
-void I2CInterface::I2C_Master::readSlaveBuffer()
+void I2CInterface::I2C_Master::readSlaveBuffer(int slaveAddr)
 {
-    Wire.beginTransmission(I2C_SLAVE_ADDRESS);
+    Wire.beginTransmission(slaveAddr);
     Wire.write("RequestDataSize");
     int retVal = Wire.endTransmission();
     // snprintf(logStr, sizeof(logStr), "[%s] Request data size (ret:%d)", __FUNCTION__, retVal);
     // Serial.println(logStr);
 
     size_t dataSize = 0;
-    retVal = Wire.requestFrom(I2C_SLAVE_ADDRESS, 1); // Size만 가져온다 (1byte data)
+    retVal = Wire.requestFrom(slaveAddr, 1); // Size만 가져온다 (1byte data)
     if (retVal >= 0)
     {
         while (Wire.available())
@@ -44,16 +45,16 @@ void I2CInterface::I2C_Master::readSlaveBuffer()
     {
         // Serial.printf("[%s:%d] Read recv buffer\n", __FUNCTION__, __LINE__);
 
-        Wire.beginTransmission(I2C_SLAVE_ADDRESS);
+        Wire.beginTransmission(slaveAddr);
         Wire.write("RequestData");
         retVal = Wire.endTransmission();
 
-        int numOfFragment = (dataSize + I2C_BUFFER_SIZE) / I2C_BUFFER_SIZE;
+        int numOfFragment = (dataSize + I2C_INTERNAL_BUFFER_SIZE) / I2C_INTERNAL_BUFFER_SIZE;
         for (int fragmentIdx = 0; fragmentIdx < numOfFragment; fragmentIdx++)
         {
-            size_t fragmentSize = ((fragmentIdx + 1) == numOfFragment) ? (dataSize % I2C_BUFFER_SIZE) : I2C_BUFFER_SIZE;
+            size_t fragmentSize = ((fragmentIdx + 1) == numOfFragment) ? (dataSize % I2C_INTERNAL_BUFFER_SIZE) : I2C_INTERNAL_BUFFER_SIZE;
 
-            retVal = Wire.requestFrom(I2C_SLAVE_ADDRESS, fragmentSize);
+            retVal = Wire.requestFrom(slaveAddr, fragmentSize);
             if (retVal >= 0)
             {
                 while (Wire.available())
@@ -76,6 +77,34 @@ void I2CInterface::I2C_Master::readSlaveBuffer()
     }
 }
 
+void I2CInterface::I2C_Master::writeSlaveBuffer(int slaveAddr)
+{
+    // char logStr[64] = {
+    //     0,
+    // };
+
+    int numOfFragment = (i2cWriteBufferSize + I2C_INTERNAL_BUFFER_SIZE) / I2C_INTERNAL_BUFFER_SIZE;
+    for (int fragmentIdx = 0; fragmentIdx < numOfFragment; fragmentIdx++)
+    {
+        Wire.beginTransmission(slaveAddr);
+        size_t fragmentSize = ((fragmentIdx + 1) == numOfFragment) ? (i2cWriteBufferSize % I2C_INTERNAL_BUFFER_SIZE) : I2C_INTERNAL_BUFFER_SIZE;
+        int retVal = Wire.write(i2cWriteBuffer + (I2C_INTERNAL_BUFFER_SIZE * fragmentIdx), fragmentSize);
+        // snprintf(logStr, sizeof(logStr), "[%s:%d] Send Buffer(%d)", __FUNCTION__, __LINE__, retVal);
+        // Serial.println(logStr);
+
+        // for (int i = 0; i < fragmentSize; i++)
+        // {
+        //     Serial.print((int)i2cWriteBuffer[I2C_INTERNAL_BUFFER_SIZE * fragmentIdx + i]);
+        //     Serial.print(' ');
+        // }
+        // Serial.println();
+
+        Wire.endTransmission();
+    }
+
+    clearWriteBuffer();
+}
+
 void I2CInterface::I2C_Slave::init()
 {
     // I2C : Slave
@@ -95,17 +124,13 @@ void I2CInterface::I2C_Slave::receiveEvent(int numOfBytes)
     // snprintf(logStr, sizeof(logStr), "[%s] Data arrives. Size:%d", __FUNCTION__, numOfBytes);
     // Serial.println(logStr);
 
-    char reqCommand[I2C_BUFFER_SIZE] = {
-        0,
-    };
-    size_t reqCommandIdx = 0;
     while (Wire.available()) // slave may send less than requested
     {
         int byte = Wire.read();
-        reqCommand[reqCommandIdx++] = (char)byte;
+        i2cReadBuffer[i2cReadBufferIdx++] = (char)byte;
     }
 
-    if (memcmp(reqCommand, "RequestDataSize", sizeof("RequestDataSize")) == 0)
+    if (memcmp(i2cReadBuffer, "RequestDataSize", sizeof("RequestDataSize")) == 0)
     {
         // char logStr[64] = {
         //     0,
@@ -114,8 +139,9 @@ void I2CInterface::I2C_Slave::receiveEvent(int numOfBytes)
         // Serial.println(logStr);
 
         commandType = 0; // Size
+        clearReadBuffer();
     }
-    else if (memcmp(reqCommand, "RequestData", sizeof("RequestData")) == 0)
+    else if (memcmp(i2cReadBuffer, "RequestData", sizeof("RequestData")) == 0)
     {
         // char logStr[64] = {
         //     0,
@@ -124,6 +150,11 @@ void I2CInterface::I2C_Slave::receiveEvent(int numOfBytes)
         // Serial.println(logStr);
 
         commandType = 1; // Data
+        clearReadBuffer();
+    }
+    else
+    {
+        MessageInterface::MessageReceiver::listen();
     }
 }
 
@@ -142,21 +173,21 @@ void I2CInterface::I2C_Slave::requestEvent()
         int retVal = Wire.write((uint8_t)i2cWriteBufferSize);
         // snprintf(logStr, sizeof(logStr), "[%s:%d] Send Buffer size(%d)", __FUNCTION__, __LINE__, i2cWriteBufferSize);
         // Serial.println(logStr);
-        numOfFragment = (i2cWriteBufferSize + I2C_BUFFER_SIZE) / I2C_BUFFER_SIZE;
+        numOfFragment = (i2cWriteBufferSize + I2C_INTERNAL_BUFFER_SIZE) / I2C_INTERNAL_BUFFER_SIZE;
         // snprintf(logStr, sizeof(logStr), "[%s:%d] NumOfFragment:%d", __FUNCTION__, __LINE__ numOfFragment);
         // Serial.println(logStr);
     }
     break;
     case 1: // Data
     {
-        size_t fragmentSize = ((fragmentIdx + 1) == numOfFragment) ? (i2cWriteBufferSize % I2C_BUFFER_SIZE) : I2C_BUFFER_SIZE;
-        int retVal = Wire.write(i2cWriteBuffer + (I2C_BUFFER_SIZE * fragmentIdx), fragmentSize);
+        size_t fragmentSize = ((fragmentIdx + 1) == numOfFragment) ? (i2cWriteBufferSize % I2C_INTERNAL_BUFFER_SIZE) : I2C_INTERNAL_BUFFER_SIZE;
+        int retVal = Wire.write(i2cWriteBuffer + (I2C_INTERNAL_BUFFER_SIZE * fragmentIdx), fragmentSize);
         // snprintf(logStr, sizeof(logStr), "[%s:%d] Send Buffer(%d)", __FUNCTION__, __LINE__ retVal);
         // Serial.println(logStr);
 
         // for (int i = 0; i < fragmentSize; i++)
         // {
-        //     Serial.print((int)i2cWriteBuffer[I2C_BUFFER_SIZE * fragmentIdx + i]);
+        //     Serial.print((int)i2cWriteBuffer[I2C_INTERNAL_BUFFER_SIZE * fragmentIdx + i]);
         //     Serial.print(' ');
         // }
         // Serial.println();
@@ -190,10 +221,19 @@ void I2CInterface::writeWriteBuffer(uint8_t byte)
 
 void I2CInterface::clearWriteBuffer()
 {
-    for (int i = 0; i < I2C_BUFFER_SIZE; i++)
+    for (int i = 0; i < I2C_INTERFACE_BUFFER_SIZE; i++)
     {
         i2cWriteBuffer[i] = 0;
     }
     i2cWriteBufferIdx = 0;
     i2cWriteBufferSize = 0;
+}
+
+void I2CInterface::clearReadBuffer()
+{
+    for (int i = 0; i < I2C_INTERFACE_BUFFER_SIZE; i++)
+    {
+        i2cReadBuffer[i] = 0;
+    }
+    i2cReadBufferIdx = 0;
 }

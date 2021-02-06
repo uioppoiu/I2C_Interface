@@ -15,32 +15,20 @@ void MessageInterface::MessageReceiver::listen()
     // }
     // Serial.println();
 
-    bool begin = false;
-    if (I2CInterface::i2cReadBufferIdx >= 7)
-    {
-        if (memcmp(I2CInterface::i2cReadBuffer, "<BEGIN>", 7) == 0)
-        {
-            begin = true;
-        }
-    }
+    const bool begin = (I2CInterface::i2cReadBufferIdx >= 7) &&
+                       (memcmp(I2CInterface::i2cReadBuffer, "<BEGIN>", 7) == 0);
+    if (begin == false)
+        return;
 
-    bool end = false;
-    if (I2CInterface::i2cReadBufferIdx >= 5)
-    {
-        if (memcmp(I2CInterface::i2cReadBuffer + I2CInterface::i2cReadBufferIdx - 5, "<END>", 5) == 0)
-        {
-            end = true;
-        }
-    }
+    const bool end = (I2CInterface::i2cReadBufferIdx >= 5) &&
+                     (memcmp(I2CInterface::i2cReadBuffer + I2CInterface::i2cReadBufferIdx - 5, "<END>", 5) == 0);
+    if (end == false)
+        return;
 
-    if(begin && end)
-    {
-        MessageReceiver rcv(I2CInterface::i2cReadBuffer + 7, I2CInterface::i2cReadBufferIdx - (7 + 5));
-        rcv.processMessage();
+    MessageReceiver rcv(I2CInterface::i2cReadBuffer + 7, I2CInterface::i2cReadBufferIdx - (7 + 5));
+    rcv.processMessage();
 
-        memset(I2CInterface::i2cReadBuffer, 0x00, sizeof(I2CInterface::i2cReadBuffer));
-        I2CInterface::i2cReadBufferIdx = 0;
-    }
+    I2CInterface::clearReadBuffer();
 }
 
 MessageInterface::MessageReceiver::MessageReceiver(const uint8_t *msg, size_t msgSize)
@@ -66,10 +54,9 @@ void MessageInterface::MessageReceiver::processMessage()
     const uint32_t seqId = ntohl(msgHeader->seqId);
     const uint8_t numOfData = msgHeader->numOfData; // 데이터의 수
 
-    Serial.print("MsgId:0x");
-    Serial.print(msgId,16);
-    Serial.print(" SeqId:");
-    Serial.println(seqId);
+    char logStr[128] = {0,};
+    snprintf(logStr, sizeof(logStr), "[%s:%d] Recv. MsgId:0x%X SeqId:%d\n", __FUNCTION__, __LINE__, msgId, seqId);
+    Serial.print(logStr);
 
     switch (msgId)
     {

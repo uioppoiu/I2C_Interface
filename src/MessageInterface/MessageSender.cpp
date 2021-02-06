@@ -33,11 +33,11 @@ void MessageInterface::MessageSender::sendMessage()
     I2CInterface::writeWriteBuffer(_messageBuffer, _header->msgSize);
     I2CInterface::writeWriteBuffer((uint8_t*)"<END>", 5);
 
-    // char logStr[64] = {
-    //     0,
-    // };
-    // snprintf(logStr, sizeof(logStr), "[%s:%d] Write Send Message. Size(%d)", __FUNCTION__, __LINE__, _header->msgSize);
-    // Serial.println(logStr);
+    char logStr[64] = {
+        0,
+    };
+    snprintf(logStr, sizeof(logStr), "[%s:%d] Write Send Message. Size(%d)", __FUNCTION__, __LINE__, _header->msgSize);
+    Serial.println(logStr);
 
     interrupts();
 }

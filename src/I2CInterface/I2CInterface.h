@@ -6,7 +6,7 @@
 #include <string.h>
 
 #define I2C_SLAVE_ADDRESS (10)
-#define I2C_BUFFER_SIZE (32)
+#define I2C_INTERNAL_BUFFER_SIZE (32)
 #define I2C_INTERFACE_BUFFER_SIZE (128)
 
 class I2CInterface
@@ -22,13 +22,15 @@ public:
     static void writeWriteBuffer(uint8_t *buf, size_t size);
     static void writeWriteBuffer(uint8_t byte);
     static void clearWriteBuffer();
+    static void clearReadBuffer();
 
     class I2C_Master
     {
     public:
         // I2C Interface
         static void init();
-        static void readSlaveBuffer(); // Slave측 Buffer에서 data를 가져온다.
+        static void readSlaveBuffer(int slaveAddr = I2C_SLAVE_ADDRESS); // Slave측 Buffer에서 data를 가져온다.
+        static void writeSlaveBuffer(int slaveAddr = I2C_SLAVE_ADDRESS); // Slave측 Buffer에 data를 쓴다.
     };
 
     class I2C_Slave
