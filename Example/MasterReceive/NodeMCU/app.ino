@@ -1,136 +1,246 @@
-#include <stdio.h>
-#include <Wire.h>
+#include <ArduinoJson.h>
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <time.h>
+#include <TZ.h>
+#include "src/aws_cert.h"
 #include "src/I2CInterface/I2CInterface.h"
+#include "src/MessageInterface/MessageInterface.h"
 
-#define LOG_STRING_MAX_SIZE (64)
-char logStr[LOG_STRING_MAX_SIZE] = {
-    0,
-};
+const char *WIFI_ID = "A1504_2.4Ghz";
+const char *WIFI_PASS = "hongsik102*";
 
-const char *WIFI_ID = "ANH_2.4G";
-const char *WIFI_PASS = "12345678";
-const char *URL_BASE = "http://anhands.synology.me/insert.php";
+void subscriptionCallback(char *topic, byte *payload, unsigned int length)
+{
+    Serial.print("Message arrived [");
+    Serial.print(topic);
+    Serial.print("] ");
+    for (int i = 0; i < length; i++)
+    {
+        Serial.print((char)payload[i]);
+    }
+    Serial.println();
+}
+
+X509List ca(ca_str);
+X509List cert(cert_str);
+PrivateKey key(key_str);
+WiFiClientSecure wifiClient;
+PubSubClient pubsubClient(AWS_URL, AWS_PORT, subscriptionCallback, wifiClient);
 
 void setup()
 {
     // Serial
     Serial.begin(115200);
-    Serial.println("\nSerial Initialized");
+    Serial.println("\r\nSerial Initialized");
 
     // LED
     pinMode(LED_BUILTIN, OUTPUT);
-    snprintf(logStr, sizeof(logStr), "LED Initialized. Pin:%d", LED_BUILTIN);
-    Serial.println(logStr);
+    Serial.printf("LED Initialized. Pin:%d", LED_BUILTIN);
 
     // I2C : Master
     I2CInterface::I2C_Master::init();
 
     // Callback
-    I2CInterface::CallBack::registerNotificationCallBack(onNotification);
+    MessageInterface::CallBack::registerNotificationCallBack(onNotification);
+
+    // WiFi
+    Serial.print("WiFi");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_ID, WIFI_PASS);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.print("Initialized. IP:");
+    Serial.println(WiFi.localIP());
+
+    // Certificate
+    wifiClient.setTrustAnchors(&ca);
+    wifiClient.setClientRSACert(&cert, &key);
+
+    setClock();
 }
 
-int loopCount_200ms = 0;
-int loopCount_400ms = 0;
+void setClock()
+{
+    configTime(TZ_Asia_Seoul, 0, "pool.ntp.org", "time.nist.gov");
+
+    Serial.print("Waiting for NTP time sync: ");
+    time_t now = time(nullptr);
+    while (now < 8 * 3600 * 2)
+    {
+        delay(500);
+        Serial.print(".");
+        now = time(nullptr);
+    }
+    printTime();
+}
+
+int loopCount_T1 = 0;
+int loopCount_T2 = 0;
+int loopCount_T3 = 0;
 bool ledState = 0;
 void loop()
 {
-    if (loopCount_400ms == 0)
+    defaultLoop();
+
+    if (loopCount_T1 == 0)
     {
         digitalWrite(LED_BUILTIN, ledState);
         ledState = !ledState;
     }
 
-    if (loopCount_200ms == 0)
+    // if (loopCount_T2 == 0)
+    // {
+    //     printTime();
+    //     sendSensorDataTest();
+    // }
+
+    switch (loopCount_T3)
     {
+    case 0:
         I2CInterface::I2C_Master::readSlaveBuffer();
+        break;
+    case 1:
+        MessageInterface::MessageReceiver::listen();
+        break;
     }
+}
 
-    if (loopCount_200ms == 1)
+void defaultLoop()
+{
+    if (!pubsubClient.connected())
     {
-        I2CInterface::MessageReceiver::listen();
+        reconnect();
     }
+    pubsubClient.loop();
 
-    loopCount_200ms = (loopCount_200ms + 1) % 20;
-    loopCount_400ms = (loopCount_200ms + 1) % 40;
+    loopCount_T1 = (loopCount_T1 + 1) % 50;
+    loopCount_T2 = (loopCount_T2 + 1) % 500;
+    loopCount_T3 = (loopCount_T3 + 1) % 20;
     delay(10);
 }
 
-void onNotification(uint32_t seqId, const I2CInterface::NotificationData *dataArr, size_t arrSize)
+void printTime()
+{
+    time_t now = time(nullptr);
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    Serial.print("Current time: ");
+    Serial.print(asctime(&timeinfo));
+}
+
+void sendSensorDataTest()
+{
+    static int testValue = 0;
+
+    String output;
+    StaticJsonDocument<256> doc;
+
+    doc["device_name"] = "NodeMCU_001";
+    doc["room_temperature"] = 10000 + testValue;
+    doc["room_humidity"] = 20000 + testValue;
+    doc["water_temperature"] = 30000 + testValue;
+    doc["water_conductivity"] = 40000 + testValue;
+    doc["water_ph"] = 50000 + testValue;
+    doc["water_co2"] = 60000 + testValue;
+
+    serializeJson(doc, output);
+
+    pubsubClient.publish("update/sensor", output.c_str());
+
+    Serial.printf("Publish sensor data. testValue:%d\n", testValue);
+    testValue = (testValue + 1) % 10000;
+}
+
+void reconnect()
+{
+    // Loop until we're reconnected
+    while (!pubsubClient.connected())
+    {
+        Serial.print("Attempting MQTT connection...");
+        // Create a random client ID
+        String clientId = "ESP8266";
+        // Attempt to connect
+        if (pubsubClient.connect(clientId.c_str()))
+        {
+            Serial.println("connected");
+            // Once connected, publish an announcement...
+            pubsubClient.publish("outTopic", "Reconnect");
+            // ... and resubscribe
+            pubsubClient.subscribe("inTopic");
+        }
+        else
+        {
+            Serial.print("failed, rc=");
+            Serial.print(pubsubClient.state());
+            Serial.println(" try again in 5 seconds");
+
+            char buf[256] = {
+                0,
+            };
+            wifiClient.getLastSSLError(buf, 256);
+            Serial.print("WifiClientSecure SSL error: ");
+            Serial.println(buf);
+
+            // Wait 5 seconds before retrying
+            delay(3000);
+        }
+    }
+}
+
+void onNotification(uint32_t seqId, const MessageInterface::NotificationData *dataArr, size_t arrSize)
 {
     Serial.println(__FUNCTION__);
-    for(size_t arrIdx = 0 ; arrIdx < arrSize ; arrIdx++)
+    for (size_t arrIdx = 0; arrIdx < arrSize; arrIdx++)
     {
-        const I2CInterface::ResponseGetData& data = dataArr[arrIdx];
+        const MessageInterface::ResponseGetData &msgData = dataArr[arrIdx];
         Serial.print("SeqId:");
         Serial.print(seqId);
         Serial.print(" Type:");
-        Serial.print((uint32_t)data.type);
+        Serial.print((uint32_t)msgData.type);
         Serial.print(" Value:");
-        Serial.println(data.value);
+        Serial.println(msgData.value);
     }
 
-    enum
-    {
-        IDX_HUMIDITY = 0,
-        IDX_CO2 = 1,
-        IDX_TEMP_ROOM = 2,
-        IDX_CONDUCTIVITY = 3,
-        IDX_PH = 4,
-        IDX_TEMP_WATER = 5,
-    };
-    const size_t NumOfSensor = 6;
-    const char *sensorTypeStr[NumOfSensor] = {"humidity", "co2", "temperature", "cond", "ph", "watertemp"};
-    uint32_t sensorVal[NumOfSensor] = {
-        0,
-    };
+    String output;
+    StaticJsonDocument<256> doc;
+    doc["device_name"] = "NodeMCU_001";
 
     for (size_t arrIdx = 0; arrIdx < arrSize; arrIdx++)
     {
-        const I2CInterface::ResponseGetData &msg = dataArr[arrIdx];
+        const MessageInterface::ResponseGetData &msgData = dataArr[arrIdx];
 
-        switch (msg.type)
+        switch (msgData.type)
         {
-        case I2CInterface::DataType::SensorWaterTemperature:
-            sensorVal[IDX_TEMP_WATER] = msg.value;
+        case MessageInterface::DataType::SensorWaterTemperature:
+            doc["water_temperature"] = msgData.value;
             break;
-        case I2CInterface::DataType::SensorRoomTemperature:
-            sensorVal[IDX_TEMP_ROOM] = msg.value;
+        case MessageInterface::DataType::SensorRoomTemperature:
+            doc["room_temperature"] = msgData.value;
             break;
-        case I2CInterface::DataType::SensorCO2:
-            sensorVal[IDX_CO2] = msg.value;
+        case MessageInterface::DataType::SensorCO2:
+            doc["water_co2"] = msgData.value;
             break;
-        case I2CInterface::DataType::SensorHumidity:
-            sensorVal[IDX_HUMIDITY] = msg.value;
+        case MessageInterface::DataType::SensorHumidity:
+            doc["room_humidity"] = msgData.value;
             break;
-        case I2CInterface::DataType::SensorConductivity:
-            sensorVal[IDX_CONDUCTIVITY] = msg.value;
+        case MessageInterface::DataType::SensorConductivity:
+            doc["water_conductivity"] = msgData.value;
             break;
-        case I2CInterface::DataType::SensorPH:
-            sensorVal[IDX_PH] = msg.value;
+        case MessageInterface::DataType::SensorPH:
+            doc["water_ph"] = msgData.value;
             break;
         default:
             break;
         }
     }
 
-    String dbMsg(URL_BASE);
-    for (size_t dbIdx = 0; dbIdx < NumOfSensor; dbIdx++)
-    {
-        dbMsg += ((dbIdx == 0) ? "?" : "&");
-        dbMsg += sensorTypeStr[dbIdx];
-        dbMsg += "=";
-        dbMsg += String(sensorVal[dbIdx]);
-    }
+    serializeJson(doc, output);
+    pubsubClient.publish("update/sensor", output.c_str());
 
-    Serial.print("data:");
-    Serial.println(dbMsg);
-
-    // WiFiClient client;
-    // HTTPClient http;
-    // http.begin(client, dbMsg);
-    // http.setTimeout(10000);
-    // int ret = http.GET();
-    // http.end();
-
-    // Serial.printf("Ret:%d. Done\n", ret);
+    printTime();
+    Serial.printf("Publish sensor data\n %s\n", output.c_str());
 }
