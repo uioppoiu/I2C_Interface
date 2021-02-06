@@ -20,19 +20,37 @@ void setup()
 
     // I2C : Slave
     I2CInterface::I2C_Slave::init();
+
+    // Callback
+    MessageInterface::CallBack::registerRequestSetCallBack(onRequestSet);
 }
 
-int loopCount = 0;
+int loopCount_T1 = 0;
+int loopCount_T2 = 0;
+int loopCount_T3 = 0;
 bool ledState = 0;
 void loop()
 {
-    digitalWrite(LED_BUILTIN, ledState);
-    ledState = !ledState;
+    defaultLoop();
 
-    sendTestMessage();
+    if (loopCount_T1 == 0)
+    {
+        digitalWrite(LED_BUILTIN, ledState);
+        ledState = !ledState;
+    }
 
-    loopCount = (++loopCount) % 1000;
-    delay(3000);
+    if (loopCount_T2 == 0)
+    {
+        sendTestMessage();
+    }
+}
+
+void defaultLoop()
+{
+    loopCount_T1 = (loopCount_T1 + 1) % 50;
+    loopCount_T2 = (loopCount_T2 + 1) % 500;
+    loopCount_T3 = (loopCount_T3 + 1) % 20;
+    delay(10);
 }
 
 void sendTestMessage()
@@ -47,4 +65,20 @@ void sendTestMessage()
     notiMsg.appendNotificationData(MessageInterface::DataType::SensorConductivity, 5 + v);
     notiMsg.appendNotificationData(MessageInterface::DataType::SensorPH, 6 + v);
     notiMsg.sendMessage();
+}
+
+
+void onRequestSet(uint32_t seqId, const MessageInterface::RequestSetData *dataArr, size_t arrSize)
+{
+    Serial.println(__FUNCTION__);
+    for (size_t arrIdx = 0; arrIdx < arrSize; arrIdx++)
+    {
+        const MessageInterface::RequestSetData &msgData = dataArr[arrIdx];
+        Serial.print("SeqId:");
+        Serial.print(seqId);
+        Serial.print(" Type:");
+        Serial.print((uint32_t)msgData.type);
+        Serial.print(" Value:");
+        Serial.println(msgData.value);
+    }
 }
